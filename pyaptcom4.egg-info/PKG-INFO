@@ -1,3 +1,13 @@
+Metadata-Version: 2.1
+Name: pyaptcom4
+Version: 1.0
+Summary: pyaptcom4 is python api for BINDER device 
+Home-page: https://github.com/odjvnrij/pyaptcom4
+Author: odjvnrij
+Author-email: odjvnrij72@outlook.com
+License: APACHE LICENSE, VERSION 2.0
+Requires-Python: >=3.6
+
 pyaptcom4
 =======================================
 When the device is connected through network cables, 
@@ -21,7 +31,7 @@ pip install pyaptcom4
 how to use?
 ---------------
 ```python3
-from pyaptcom4.VD import VD23
+from pyaptcom4.binder_VD import VD23
 
 box = VD23('192.168.211.36')
 box.connect()
