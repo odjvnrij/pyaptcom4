@@ -11,15 +11,7 @@ from queue import Queue
 from . import tools
 from .base import *
 
-logger = logging.getLogger()
-logger.setLevel(0)
-
-formatter = logging.Formatter('[%(levelname)s] %(asctime)s - %(message)s')
-hdlr = logging.StreamHandler()
-hdlr.setFormatter(formatter)
-hdlr.setLevel(0)
-# logger.addHandler(hdlr)
-
+logger = logging.getLogger("BINDER")
 
 def get_float_from_byte(byte: bytes) -> float:
     return struct.unpack('f', bytearray((byte[1], byte[0], byte[3], byte[2])))[0]
@@ -34,6 +26,7 @@ class BinderBase:
     """
     BINDER 设备的基类
     """
+
     def __init__(self, server_ip: str, server_port: int = 502, timeout: int = 5):
         self.server_ip = server_ip
         self.server_port = int(server_port)
@@ -48,6 +41,10 @@ class BinderBase:
         self._is_force_stable = False
         self._is_monitor_temp = False
         self._is_monitor_pressure = False
+        self.latest_temp = 0
+        self.latest_pressure = 0
+        self.latest_temp_setpoint = 0
+        self.latest_pressure_setpoint = 0
         self._history_temp = []
         self._history_pressure = []
         self._monitor_interval = 10  # 1 min -> 6x query, 60x query -> 10 min
@@ -218,7 +215,6 @@ class BinderBase:
         :param byte:
         :return:
         """
-        logger.debug(f"send body: {tools.format_bytes(byte)}")
         rest_len = len(byte) + 1
         header_bytes = (int.to_bytes(self._cur_trans_id, 2, byteorder='big') +
                         b'\x00\x00' +
@@ -238,26 +234,26 @@ class BinderBase:
         :param temp:
         :return:
         """
-        logger.debug(f"set temp {temp:.2f} ...")
-
         byte = (int.to_bytes(ModBusMsgType.WriteMultiReg, 1, "big") +
                 int.to_bytes(self._wr_temp_setpoint_addr, 2, "big") +
                 b'\x00\x02\x04')
         byte += get_byte_from_float(temp)
         self._send(byte)
-        return self.get_temp_setpoint()
+        settemp = self.get_temp_setpoint()
+        logger.debug(f"set temp setpoint {temp:.2f} C, confirm: {settemp:.2f}C")
+        return settemp
 
     def get_temp_setpoint(self) -> float:
         """
         get current temp setpoint
         :return:
         """
-        logger.debug("get settemp...")
         byte = (int.to_bytes(ModBusMsgType.ReadWrReg, 1, "big") +
                 int.to_bytes(self._rd_temp_setpoint_addr, 2, "big") +
                 b'\x00\x02')
         resp = self._send(byte)
         temp = get_float_from_byte(resp[2:6])
+        logger.debug(f"get temp setpoint: {temp:.2f} C")
         return temp
 
     def get_temp(self) -> float:
@@ -265,12 +261,12 @@ class BinderBase:
         get current temp
         :return:
         """
-        logger.debug("get temp...")
         byte = (int.to_bytes(ModBusMsgType.ReadHoldReg, 1, "big") +
                 int.to_bytes(self._cur_temp_addr, 2, "big") +
                 b'\x00\x02')
         resp = self._send(byte)
         temp = get_float_from_byte(resp[2:6])
+        logger.debug(f"get temp: {temp:.2f} C")
         return temp
 
     def pressure_setpoint(self, mpa: float) -> float:
@@ -279,25 +275,26 @@ class BinderBase:
         :param mpa:
         :return:
         """
-        logger.debug(f"set pressure {mpa:.2f} ...")
         byte = (int.to_bytes(ModBusMsgType.WriteMultiReg, 1, "big") +
                 int.to_bytes(self._wr_pressure_setpoint_addr, 2, "big") +
                 b'\x00\x02\x04')
         byte += get_byte_from_float(mpa)
         self._send(byte)
-        return self.get_pressure_setpoint()
+        setpres = self.get_pressure_setpoint()
+        logger.debug(f"set pressure setpoint{mpa:.2f} mpa, confirm: {setpres:.2f} mpa")
+        return setpres
 
     def get_pressure_setpoint(self) -> float:
         """
         get current pressure setpoint
         :return:
         """
-        logger.debug(f"get set pressure ...")
         byte = (int.to_bytes(ModBusMsgType.ReadWrReg, 1, "big") +
                 int.to_bytes(self._rd_pressure_setpoint_addr, 2, "big") +
                 b'\x00\x02')
         resp = self._send(byte)
         mpa = get_float_from_byte(resp[2:6])
+        logger.debug(f"get pressure setpoint {mpa:.2f} mpa")
         return mpa
 
     def get_pressure(self) -> float:
@@ -305,12 +302,12 @@ class BinderBase:
         get current pressure value
         :return:
         """
-        logger.debug(f"get pressure ...")
         byte = (int.to_bytes(ModBusMsgType.ReadHoldReg, 1, "big") +
                 int.to_bytes(self._cur_pressure_addr, 2, "big") +
                 b'\x00\x02')
         resp = self._send(byte)
         mpa = get_float_from_byte(resp[2:6])
+        logger.debug(f"get pressure: {mpa:.2f} mpa")
         return mpa
 
     def disconnect(self):
@@ -326,14 +323,13 @@ class BinderBase:
         connect to binder device
         :return:
         """
-        logger.debug("connecting ...")
+        logger.info("binder connecting ...")
         self.socket.connect(self.server_addr)
         self.socket.settimeout(self.timeout)
         self._is_open = True
-        logger.debug("connectinged")
         self._recv_th = threading.Thread(target=self._recv)
         self._recv_th.start()
-        logger.debug("connectinged quit")
+        logger.info("binder connected")
 
     def _monitor_temp(self, cur_temp: float, temp_setpoint: float):
         """
@@ -343,6 +339,8 @@ class BinderBase:
         :return:
         """
         self._history_temp.append(cur_temp)
+        self.latest_temp = cur_temp
+        self.latest_temp_setpoint = temp_setpoint
         if len(self._history_temp) < self._stable_threshold:
             return
 
@@ -351,6 +349,8 @@ class BinderBase:
                        abs(temp_setpoint - min(self._history_temp)))
         if _max_err <= self._stable_threshold_temp:
             self._temp_stable_event.set()
+            logger.info(
+                f"temp stable, temp_setpoint: {temp_setpoint:.2f}C, latest_temp: {self._history_temp[-1]:.2f}C, max_err: ±{_max_err:.2f}C")
         else:
             self._temp_stable_event.clear()
 
@@ -362,6 +362,8 @@ class BinderBase:
         :return:
         """
         self._history_pressure.append(cur_pressure)
+        self.latest_pressure = cur_pressure
+        self.latest_pressure_setpoint = pressure_setpoint
         if len(self._history_pressure) < self._stable_threshold:
             return
 
@@ -370,14 +372,17 @@ class BinderBase:
                        abs(pressure_setpoint - min(self._history_pressure)))
         if _max_err <= self._stable_threshold_pressure:
             self._pressure_stable_event.set()
+            logger.info(
+                f"pressure stable, pressure_setpoint: {pressure_setpoint:.2f}mpa, latest_pressure: {self._history_pressure[-1]:.2f}mpa, max_err: ±{_max_err:.2f}mpa")
         else:
             self._pressure_stable_event.clear()
 
     def _monitor(self):
-        logger.debug("monitor th start run...")
+        logger.debug("binder monitor thread start ...")
         warn_cnt = 0
         while self._is_monitor_open:
             try:
+                time.sleep(self._monitor_interval)
 
                 if self._is_monitor_temp:
                     temp_setpoint = self.get_temp_setpoint()
@@ -396,21 +401,19 @@ class BinderBase:
                     else:
                         warn_cnt += 1
 
-                time.sleep(self._monitor_interval)
-
             except ConnectionAbortedError:
-                logger.info(f"tcp conn disconnect: {self.socket.getpeername()}")
+                logger.info(f"binder tcp conn disconnect: {self.socket.getpeername()}")
                 break
 
             except (socket.timeout, OSError):
                 if self._is_monitor_open:
                     continue
                 else:
-                    logger.info("tcp client close, monitor thread quit")
+                    logger.info("binder monitor close, monitor thread quit")
                     break
 
             except Exception as err:
-                logger.error("tcp recv thread error")
+                logger.error("bingder tcp recv thread error")
                 logger.error(traceback.format_exc())
                 raise err
 
@@ -422,6 +425,8 @@ class BinderBase:
         :param monitor_pressure:
         :return:
         """
+        logger.info(
+            f"binder monitor start at interval {interval}s, monitor temp: {monitor_temp}, monitor pressure: {monitor_pressure}")
         self._is_monitor_open = True
         self.monitor_interval = interval
         self.is_monitor_temp = monitor_temp
@@ -438,7 +443,7 @@ class BinderBase:
         wait untill temp stable, if not stable, will keep block
         :return:
         """
-        if self._is_monitor_open:
+        if not self._is_monitor_open:
             raise ValueError("open monitor first")
         elif not self.is_monitor_temp:
             raise ValueError("monitor temp is not open")
@@ -451,7 +456,7 @@ class BinderBase:
         wait untill pressure stable, if not stable, will keep block
         :return:
         """
-        if self._is_monitor_open:
+        if not self._is_monitor_open:
             raise ValueError("open monitor first")
         elif not self.is_monitor_pressure:
             raise ValueError("monitor pressure is not open")
