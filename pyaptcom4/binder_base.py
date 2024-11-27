@@ -105,7 +105,7 @@ class BinderBase:
         if not self._monitor_interval:
             raise ValueError
 
-        self._stable_threshold = self._stable_threshold_minute * 60 / self._monitor_interval
+        self._stable_threshold = int(self._stable_threshold_minute * 60 / self._monitor_interval)
 
     @property
     def stable_threshold_minute(self):
@@ -117,7 +117,7 @@ class BinderBase:
         if not self._stable_threshold_minute:
             raise ValueError
 
-        self._stable_threshold = self._stable_threshold_minute * 60 / self._monitor_interval
+        self._stable_threshold = int(self._stable_threshold_minute * 60 / self._monitor_interval)
 
     @property
     def stable_threshold_temp(self):
