@@ -54,6 +54,7 @@ class BinderBase:
         self._stable_threshold_pressure = 20
         self._temp_stable_event = threading.Event()
         self._pressure_stable_event = threading.Event()
+        self._op_lock = threading.Lock()
 
         self._cur_trans_id = 0
         self._cur_resp_event = threading.Event()
@@ -215,6 +216,7 @@ class BinderBase:
         :param byte:
         :return:
         """
+        self._op_lock.acquire()
         rest_len = len(byte) + 1
         header_bytes = (int.to_bytes(self._cur_trans_id, 2, byteorder='big') +
                         b'\x00\x00' +
@@ -226,6 +228,9 @@ class BinderBase:
         self.socket.sendall(b)
         self._cur_resp_event.wait()
         self._cur_trans_id += 1
+        if self._cur_trans_id > 65535:
+            self._cur_trans_id = 100
+        self._op_lock.release()
         return self._cur_resp_body.byte
 
     def temp_setpoint(self, temp: float) -> float:

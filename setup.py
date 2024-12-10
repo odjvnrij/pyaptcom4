@@ -7,7 +7,7 @@ README = (here / "README.md").read_text(encoding="utf-8")
 
 setup(
     name='pyaptcom4',
-    version='1.1',
+    version='1.12',
     description='pyaptcom4 is python api for BINDER device ',
     long_description=README,
     packages=find_packages(),
